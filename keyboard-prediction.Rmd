@@ -1,0 +1,428 @@
+---
+title: 'Prediction of keyboard input: Exploratory data analysis and development plan'
+author: "Daigo Tanaka"
+date: "March 21, 2015"
+output: html_document
+---
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# My usual front matter for Rmd
+
+setwd("/Users/daigo/projects/stats/datascience-capstone")
+message(paste("Working directory:", getwd(), sep=" "))
+
+library(knitr)
+library(RCurl)
+library(stringr)
+library(ggplot2)
+library(gridExtra)
+
+version <- sessionInfo()$R.version$version.string
+platform <- sessionInfo()$platform
+
+opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE, comment=NA,
+              results="asis", tidy=FALSE, cache=FALSE)
+
+# Set significant digits
+options(scipen = 20, digits = 2)
+
+# Load caption helper
+code <- getURL("https://gist.githubusercontent.com/daigotanaka/17930c2ff891e05a83f5/raw/3c4f4af54cbdf8ec77d4b5112b34e9307ce92b7c/rmd_caption_helper.R")
+eval(parse(text=code))
+
+fig <- Caption$new()
+tab <- Caption$new("Table")
+fn <- Footnote$new()
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Helper scripts
+
+# Clean up and tokenize
+source("cleanup_tokenize.R", echo=FALSE)
+
+# File name helpers
+source("filename.R", echo=FALSE)
+
+# Create train and test data
+source("create_train_test.R", echo=FALSE)
+
+# Create n-grams
+source("create_ngrams.R", echo=FALSE)
+
+# prediction tools
+source("prediction.R", echo=FALSE)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Download data
+source("download_data.R", echo=FALSE)
+
+locale <- "en_US"
+source <- c("news", "blogs", "twitter")
+
+# Generate training & test data
+set.seed(926)
+for (i in 1:length(source)) {
+    trainFileName <- paste(dataDir, "/", locale, "/", locale, ".", source[i],
+                           "_train.txt", sep="")
+    if (file.exists(trainFileName)) {
+        message(paste("File already exists for ", locale, "_", source[i],
+                      sep=""))
+        next
+    }
+    testFileName <- paste(dataDir, "/", locale, "/", locale, ".", source[i],
+                           "_test.txt", sep="")
+    inFileName <- getFileName(locale, source[i])
+    createTrainTestData(inFileName, trainFileName, testFileName, cleanTrain=TRUE)
+    message(paste("Generated ", source[i], " train/test data"), sep="")
+}
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Load or generate n-grams from the training data
+locale <- "en_US"
+trainSource <- c("news_train", "blogs_train", "twitter_train")
+fourGramChunksFileName <- paste("fourGramChunks_",
+                                locale,
+                                "_",
+                                paste(trainSource, collapse="_"),
+                                ".rds",
+                                sep="")
+
+if (!file.exists("fourGrams_en_US_news_blogs_twitter.rds")){
+    if (file.exists(fourGramChunksFileName)) {
+        message("Loading four-gram chunks from file...")
+        system.time(fourGramChunks <- as.data.table(readRDS(fourGramChunksFileName)))
+    } else {
+        message("Generating four-gram chunks...")
+        system.time(fourGramChunks <- create4GramChunks(locale=locale, source=trainSource))
+        gc()
+        system.time(
+            saveRDS(
+                fourGramChunks,
+                fourGramChunksFileName))
+        gc()
+    }
+
+    message("Generating n-gram models...")
+    system.time(fourGrams <- fourGramChunks[!is.na(N2) & !is.na(N3) & !is.na(N4), sum(N), .(N1, N2, N3, N4)])
+    fourGrams <- fourGrams[order(-fourGrams$V1),]
+    saveRDS(fourGrams, "fourGrams_en_US_news_blogs_twitter.rds")
+    rm(fourGrams)
+    gc()
+
+    system.time(
+        threeGrams <- fourGramChunks[!is.na(N2) & !is.na(N3),  sum(N),
+                                     .(N1, N2, N3)])
+    threeGrams <- threeGrams[order(-threeGrams$V1),]
+    saveRDS(threeGrams, "threeGrams_en_US_news_blogs_twitter.rds")
+    rm(threeGrams)
+    gc()
+
+    system.time(
+        twoGrams <- fourGramChunks[!is.na(N2),  sum(N), .(N1, N2)])
+    twoGrams <- twoGrams[order(-twoGrams$V1),]
+    saveRDS(twoGrams, "twoGrams_en_US_news_blogs_twitter.rds")
+    rm(twoGrams)
+    gc()
+
+    system.time(
+        oneGrams <- fourGramChunks[,  sum(N), .(N1)])
+    oneGrams <- oneGrams[order(-oneGrams$V1),]
+    saveRDS(oneGrams, "oneGrams_en_US_news_blogs_twitter.rds")
+    rm(oneGrams)
+    rm(fourGramChunks)
+    gc()
+}
+# gc()
+message("Loading n-gram models from disk...")
+nGrams <- list(readRDS("oneGrams_en_US_news_blogs_twitter.rds"),
+               readRDS("twoGrams_en_US_news_blogs_twitter.rds"),
+               readRDS("threeGrams_en_US_news_blogs_twitter.rds"),
+               readRDS("fourGrams_en_US_news_blogs_twitter.rds"))
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Count lines and words
+counts <- data.frame(
+    locale=c(rep("en_US", 6), rep("de_DE", 6), rep("ru_RU", 6), rep("fi_FI", 6)),
+    source=rep(c("news", "blogs", "twitter"), 8),
+    type=rep(c("lines", "words"), 12),
+    count=rep(0, 24)
+    )
+
+getCount <- function(locale, source, type) {
+    return (counts[
+                counts$locale==locale &
+                counts$source==source &
+                counts$type==type,]$count)
+}
+
+for (i in 1:nrow(counts)) {
+    item <- counts[i,]
+    inFileName <- getFileName(item$locale, item$source)
+
+    if (item$type == "words") {
+        ret <- system(paste("wc -w ", getwd(), "/", inFileName, sep=""),
+                             intern=TRUE)
+        counts[i,]$count <- as.integer(strsplit(str_trim(ret), " ")[[1]][1])
+    } else {
+        ret <- system(paste("wc -l ", getwd(), "/", inFileName, sep=""),
+                         intern=TRUE)
+        counts[i,]$count <- as.integer(strsplit(str_trim(ret), " ")[[1]][1])
+    }
+}
+rm(item)
+# gc()
+
+# Most frequent n-grams
+ngrams <- c()
+for (i in 1:4) {
+    for (j in 1:5) {
+        ngrams <- c(ngrams, paste(nGrams[[i]][j], collapse=" "))
+    }
+}
+mf <- matrix(ngrams, nrow=4, ncol=5, byrow=TRUE)
+
+```
+<h1 class="countheads">Prediction of keyboard input: Exploratory data analysis and development plan</h1>
+
+***Daigo Tanaka***
+
+***March 21, 2015***
+
+## Introduction
+
+To assist typing texts in small devices such as smart phones, a software
+keyboard could predict what the user is going to type and display the candidates
+of words so that the user can choose instead of typing the whole word.
+Statistical machine learning system can perform such prediction tasks by
+analyzing example texts (corpus). This report
+```{r}
+fn$label("source")
+```
+describes a plan for developing
+keyboard input prediction algorithm.
+
+The current report is a milestone report as part to complete Data Science
+Specialization capstone project on Coursera instructed by Jeff Leek, PhD, Roger D.
+Peng, PhD, and Brian Caffo, PhD from Department of Biostatistics at Johns Hopkins
+Bloomberg School of Public Health
+```{r}
+fn$label("coursera")
+```
+in collaboration with SwiftKey
+```{r}
+fn$label("swiftkey")
+```
+.
+
+## Data aquisition and transformation
+
+The corpus data
+```{r}
+fn$label("dataset")
+```
+used in this report is generated with a freely available data
+from HC corpora project
+```{r}
+fn$label("hccorpora")
+```
+. The corpora are collected from publicly available sources by a web crawler.
+The sources include news, blogs, and Twitter. The locale includes US English
+(en_US), German (de_DE), Russian (ru_RU), and Finnish (fi_FI). Table
+`r tab$label("counts")`
+shows the line and word counts from each locale and source. In this milestone
+report, I focus on analyzing en_US data.
+
+`r render_caption(tab$text("counts","Line and word counts from each locale and source"))`
+
+| Locale | Source  | # of lines | # of words |
+| :----- | :------ | ---------: | ---------: |
+| en_US  | news    | `r getCount("en_US", "news", "lines")` | `r getCount("en_US", "news", "words")`|
+|        | blogs    | `r getCount("en_US", "blogs", "lines")` | `r getCount("en_US", "blogs", "words")`|
+|        | twitter | `r getCount("en_US", "twitter", "lines")` | `r getCount("en_US", "twitter", "words")`|
+| de_DE  | news    | `r getCount("de_DE", "news", "lines")` | `r getCount("de_DE", "news", "words")`|
+|        | blogs    | `r getCount("de_DE", "blogs", "lines")` | `r getCount("de_DE", "blogs", "words")`|
+|        | twitter | `r getCount("de_DE", "twitter", "lines")` | `r getCount("de_DE", "twitter", "words")`|
+| ru_RU  | news    | `r getCount("ru_RU", "news", "lines")` | `r getCount("ru_RU", "news", "words")`|
+|        | blogs    | `r getCount("ru_RU", "blogs", "lines")` | `r getCount("ru_RU", "blogs", "words")`|
+|        | twitter | `r getCount("ru_RU", "twitter", "lines")` | `r getCount("ru_RU", "twitter", "words")`|
+| fi_FI  | news    | `r getCount("fi_FI", "news", "lines")` | `r getCount("fi_FI", "news", "words")`|
+|        | blogs    | `r getCount("fi_FI", "blogs", "lines")` | `r getCount("fi_FI", "blogs", "words")`|
+|        | twitter | `r getCount("fi_FI", "twitter", "lines")` | `r getCount("fi_FI", "twitter", "words")`|
+
+### Generating training and test data
+
+For each data source, 60% of the input was randomly picked to form sets of
+training data, and the rest is stored as test data. The rest of the report
+only analyze the training data.
+
+### Cleaning data
+
+The following words are considered during the data cleaning process:
+
+- **Non-ASCII characters**: There is not an occasion for human to type non-ASCII
+  characters, so they are removed from the training data.
+- **Profane words**: While the distribution of profane words may be statistically
+  interesting, I would like to avoid suggesting such words in the keyboard input
+  application as it may be offensive to many users. A list of profane words in
+  English was obtained from Luis von Ahn's research group
+```{r}
+fn$label("profane")
+```
+  . The profane words
+  in the training data was replaced by "****" during the training data generation.
+- **Stop words**: When extracting the semantics of the text for applications
+  such as document classification, it is useful to remove stop words entirely.
+  In the keyboard input prediction however, it may be helpful to suggest stop
+  words (e.g. Suggesting "herself" followed by the existing input "She did this
+  all by") So, I am currently creating training data with and without stop
+  words included. The rest of the report shows the result with stop words
+  included. The list of stop words were obtained from XPO6's list
+```{r}
+fn$label("stopwords")
+```
+  .
+- **Stemming**: I chose not to stem the words for similar reason as in stop words.
+  There are common expressions (e.g. killing two birds with one stone), where
+  singularization won't work well.
+
+### Tokenizing and generating 4-gram chunks
+
+The input often contains multiple sentences and fragments that are typically
+separated by characters such as ".", "?", "!", ",", ";", and ":". The input was
+made into sentence/fragment chunks with those separation characters. One of the
+unresolved problems of course is the abbreviations such as "U.S.A." and "Ph.D.".
+
+The sentence/fragment chunks are then tokenized. For keyboard input prediction
+purpose, the apostrophes "'" are treated as a valid characters to preserve the
+expression like "don't" and "can't" as these are common expressions that the
+users could be benefit by automated suggestions instead of having to type "'".
+
+The goal in the current report was to create 4, tri, bi, and uni-grams
+efficiently. There are R packages to create n-grams, but those tend to be
+over-sophisticated for the current application, and often found to be very slow
+in execution and consuming large memory. So, this task was accomplished by
+writing my own function. The function combines all the tokens into a vector
+object, inserting 3 NAs at each break of sentences/fragments. By copying the
+vector into a data table with four token columns by shifting one word as it
+moves onto the next row, 4 gram chunks can be created efficiently. Here are
+some examples of the chunks:
+
+1. He started playing guitar
+2. started playing guitar NA
+3. playing guitar NA NA
+4. guitar NA NA NA
+
+In the example above, the first token from all are used to generate unigrams.
+The sequence of the first and second tokens from Example 1 to 3 are used to
+to generate bigrams. The sequence of the first, second, and third from Example
+1 and 2 are used to generated trigrams. The whole sequence from the Example 1
+is used to generate 4-grams. Finally, the data table is aggregated by counting
+the occurrences of each n-grams.
+
+## Exploratory data analysis
+
+### Most frequent n-grams
+
+Table `r tab$label("mostfreq")` shows the 5
+most frequent n-grams. The frequent appearance of the expression such as "thanks
+for the follow" indicates that Twitter corpus is biasing the distribution.
+
+`r render_caption(tab$text("mostfreq", "Five most frequent word sequences in 1 to 4-grams. The number indicates the frequency in the training data."))`
+
+| n-gram  | No.1         | No.2         | No.3         | No.4         | No.5         |
+| :------ | :----------- | :----------- | :----------- | :----------- | :----------- |
+| Unigram | `r mf[1, 1]` | `r mf[1, 2]` | `r mf[1, 3]` | `r mf[1, 4]` | `r mf[1, 5]` |
+| Bigram  | `r mf[2, 1]` | `r mf[2, 2]` | `r mf[2, 3]` | `r mf[2, 4]` | `r mf[2, 5]` |
+| Trigram | `r mf[3, 1]` | `r mf[3, 2]` | `r mf[3, 3]` | `r mf[3, 4]` | `r mf[3, 5]` |
+| 4-gram  | `r mf[4, 1]` | `r mf[4, 2]` | `r mf[4, 3]` | `r mf[4, 4]` | `r mf[4, 5]` |
+
+### Distribution of n-grams
+
+Figure
+`r fig$label("distributions")`
+shows the distributions of n-gram frequency. They all look like an exponential distribution. In fact, the majority of the 4-gram and trigram entities appear only once as in
+Table `r tab$label("once")`. This is a useful feature of the data when considering the
+strategy for efficient modeling as discussed in the later section.
+
+```{r, html.cap=fig$text("distributions", "The distribution of n-gram frequency. The count is in log(10) scale.")}
+# n-gram distribution
+grid.arrange(
+    ggplot(data=data.frame(frequency=nGrams[[1]]$V1), aes(x=frequency)) +
+        geom_histogram(drop=TRUE) + scale_y_log10() +
+        ggtitle(paste(1, "-gram")),
+    ggplot(data=data.frame(frequency=nGrams[[2]]$V1), aes(x=frequency)) +
+        geom_histogram(drop=TRUE) + scale_y_log10() +
+        ggtitle(paste(2, "-gram")),
+    ggplot(data=data.frame(frequency=nGrams[[3]]$V1), aes(x=frequency)) +
+        geom_histogram(drop=TRUE) + scale_y_log10() +
+        ggtitle(paste(3, "-gram")),
+    ggplot(data=data.frame(frequency=nGrams[[4]]$V1), aes(x=frequency)) +
+        geom_histogram(drop=TRUE) + scale_y_log10() +
+        ggtitle(paste(4, "-gram"))
+    , ncol=2)
+```
+
+`r render_caption(tab$text("once", "In bi, tri, and 4-grams, the majority of the entities appear only once."))`
+
+| n-grams | % of n-grams appearing only once |
+| :------ | -------------------------------: |
+| Unigram | `r 100 * nGrams[[1]][V1==1, sum(V1)] / nGrams[[1]][, sum(V1)]` |
+| Bigram  | `r 100 * nGrams[[2]][V1==1, sum(V1)] / nGrams[[2]][, sum(V1)]` |
+| Trigram | `r 100 * nGrams[[3]][V1==1, sum(V1)] / nGrams[[3]][, sum(V1)]` |
+| 4-gram  | `r 100 * nGrams[[4]][V1==1, sum(V1)] / nGrams[[4]][, sum(V1)]` |
+
+## Plan for developing prediction algorithm
+
+### Language model generation
+
+Generally, the text prediction problem can be expressed as the calculation of
+the conditional probability of a n-gram that are approximated by the frequency
+counts of the training data:
+
+$$P(w_{i}|w_{i-(n -1)},...,w_{i-1}) = \frac{count(w_{i-(n -1)},...,w_{i-1}, w_{i})}{count(w_{i-(n -1)},...,w_{i-1})}$$
+
+The prediction should be chosen from the n-th word in the n-gram with the
+highest probability. In case we did not encounter the particular n-gram in the
+training data, so called Stupid Backoff
+```{r}
+fn$label("stupidbackoff")
+```
+is used to approximate the probability. In Stupid Backoff, the conditional
+probability is recursively approximated as:
+
+$$S(w_{i}|w_{i-(n-1)},...,w_{i-1}) = \frac{count(w_{i-(n-1)},...,w_{i-1}, w_{i})}{count(w_{i-(n-1)},...,w_{i-1})}\ if\ count(w_{i-(n-1)},...,w_{i-1}, w_{i}) > 0,$$
+$$\alpha S(w_{i}|w_{i-(n-2)},...,w_{i-1})\ otherwise$$
+
+, where $\alpha$ is an empirically chosen constant typically set to 0.4.
+
+### Efficient modeling strategy
+
+An insight I got from the exploratory data analysis is that the most bi, tri,
+and 4-grams appear only once, making the majority of the rows of the n-gram
+data table filled with count 1. By using techniques such as Kneser–Ney
+smoothing
+```{r}
+fn$label("knsmooth")
+```
+, the probability of the low frequency n-grams is rather derived from
+the continuous probability from the lower order n-grams. This will allow the
+data table to drop all the entries with single count. Such smoothing techniques
+also enable the calculation of the n-grams that are not included in the
+training data.
+
+```{r}
+fn$update("source", 'The R markdown source code generated this document is availalbe on <a href="https://github.com/daigotanaka/datascience-capstone/blob/master/keyboard-prediction.Rmd" target="_blank">github repository</a>.')
+fn$update("coursera", 'Coursera Data Science Specialization Capstone project [<a href="https://www.coursera.org/course/dsscapstone">link</a>]')
+fn$update("swiftkey", 'Swiftkey [<a href="http://swiftkey.com/">link</a>]')
+fn$update("dataset", 'Dataset can be downloaded from <a href="https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip">here</a>. (zipped, 548MB)')
+fn$update("hccorpora", 'HC corpora [<a href="http://www.corpora.heliohost.org/">link</a>]')
+fn$update("profane", 'Offensive/Profane Word List [<a href="http://www.cs.cmu.edu/~biglou/resources/">link</a>]')
+fn$update("stopwords", 'List of English Stop Words - XPO6 [<a href="http://xpo6.com/list-of-english-stop-words/">link</a>]')
+fn$update("stupidbackoff", 'Brants et al, Large language models in machine translation, EMNLP (2007), pp 858--867 [<a href="http://www.aclweb.org/anthology/D07-1090.pdf">link</a>]')
+fn$update("knsmooth", 'Chen, et al. An empirical study of smoothing techniques for language modeling. Computer Speech and Language (1999) 13, pp.359-394. [<a href="http://u.cs.biu.ac.il/~yogo/courses/mt2013/papers/chen-goodman-99.pdf">link</a>]')
+
+fn$render(head='<h3 class="nocount">References and notes</h3>')
+```

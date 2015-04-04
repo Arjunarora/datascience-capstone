@@ -33,10 +33,16 @@ tokenize <- function(cleanText) {
     tokens <- c()
     sentences <- stri_split_regex(cleanText, "\\.|,|;|:|\\?|!")[[1]]
     for (i in 1:length(sentences)) {
+        currentTokens <- stri_split_regex(
+            gsub("[^A-Za-z']", " ", sentences[i]),
+            "[ ]+",
+            omit_empty=TRUE)[[1]]
+        if (exists("dictenv", mode="environment")){
+            currentTokens <- unlist(mget(currentTokens, envir=dictenv, ifnotfound=NA))
+        }
         tokens <- c(
             tokens,
-            stri_split_regex(gsub("[^A-Za-z']", " ", sentences[i]), "[ ]+",
-                             omit_empty=TRUE)[[1]],
+            currentTokens,
             rep(NA, 3))
     }
     return(tokens)

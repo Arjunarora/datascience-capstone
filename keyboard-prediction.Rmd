@@ -82,19 +82,28 @@ for (i in 1:length(source)) {
 # Load or generate n-grams from the training data
 locale <- "en_US"
 trainSource <- c("news_train", "blogs_train", "twitter_train")
-fourGramChunksFileName <- paste("fourGramChunks_",
+fourGramChunksFileName <- paste("models/fourGramChunks_",
                                 locale,
                                 "_",
                                 paste(trainSource, collapse="_"),
                                 ".rds",
                                 sep="")
 
-if (!file.exists("fourGrams_en_US_news_blogs_twitter.rds")){
+if (!file.exists("models/fourGrams_en_US_news_blogs_twitter.rds")){
     if (file.exists(fourGramChunksFileName)) {
         message("Loading four-gram chunks from file...")
         system.time(fourGramChunks <- as.data.table(readRDS(fourGramChunksFileName)))
     } else {
         message("Generating four-gram chunks...")
+        dictFile <- "models/dictionary.rds"
+        if (file.exists(dictFile)) {
+            dict <- readRDS(dictFile)
+            dictenv <- new.env(hash=TRUE, size=length(dict))
+            lapply(rep(1:length(dict)),
+                   FUN=function(i) {assign(dict[i], i, envir=dictenv)})
+            rm(dict)
+            gc()
+        }
         system.time(fourGramChunks <- create4GramChunks(locale=locale, source=trainSource))
         gc()
         system.time(
@@ -107,7 +116,7 @@ if (!file.exists("fourGrams_en_US_news_blogs_twitter.rds")){
     message("Generating n-gram models...")
     system.time(fourGrams <- fourGramChunks[!is.na(N2) & !is.na(N3) & !is.na(N4), sum(N), .(N1, N2, N3, N4)])
     fourGrams <- fourGrams[order(-fourGrams$V1),]
-    saveRDS(fourGrams, "fourGrams_en_US_news_blogs_twitter.rds")
+    saveRDS(fourGrams, "models/fourGrams_en_US_news_blogs_twitter.rds")
     rm(fourGrams)
     gc()
 
@@ -115,31 +124,41 @@ if (!file.exists("fourGrams_en_US_news_blogs_twitter.rds")){
         threeGrams <- fourGramChunks[!is.na(N2) & !is.na(N3),  sum(N),
                                      .(N1, N2, N3)])
     threeGrams <- threeGrams[order(-threeGrams$V1),]
-    saveRDS(threeGrams, "threeGrams_en_US_news_blogs_twitter.rds")
+    saveRDS(threeGrams, "models/threeGrams_en_US_news_blogs_twitter.rds")
     rm(threeGrams)
     gc()
 
     system.time(
         twoGrams <- fourGramChunks[!is.na(N2),  sum(N), .(N1, N2)])
     twoGrams <- twoGrams[order(-twoGrams$V1),]
-    saveRDS(twoGrams, "twoGrams_en_US_news_blogs_twitter.rds")
+    saveRDS(twoGrams, "models/twoGrams_en_US_news_blogs_twitter.rds")
     rm(twoGrams)
     gc()
 
     system.time(
         oneGrams <- fourGramChunks[,  sum(N), .(N1)])
     oneGrams <- oneGrams[order(-oneGrams$V1),]
-    saveRDS(oneGrams, "oneGrams_en_US_news_blogs_twitter.rds")
+    saveRDS(oneGrams, "models/oneGrams_en_US_news_blogs_twitter.rds")
     rm(oneGrams)
     rm(fourGramChunks)
     gc()
 }
 # gc()
 message("Loading n-gram models from disk...")
-nGrams <- list(readRDS("oneGrams_en_US_news_blogs_twitter.rds"),
-               readRDS("twoGrams_en_US_news_blogs_twitter.rds"),
-               readRDS("threeGrams_en_US_news_blogs_twitter.rds"),
-               readRDS("fourGrams_en_US_news_blogs_twitter.rds"))
+nGrams <- list(readRDS("models/oneGrams_en_US_news_blogs_twitter.rds"),
+               readRDS("models/twoGrams_en_US_news_blogs_twitter.rds"),
+               readRDS("models/threeGrams_en_US_news_blogs_twitter.rds"),
+               readRDS("models/fourGrams_en_US_news_blogs_twitter.rds"))
+
+if (!file.exists("models/dictionary.rds")) {
+    message("Generating dictionary file...")
+    dict <- as.vector(nGrams[[1]]$N1)
+    saveRDS(dict, "models/dictionary.rds")
+    rm(dict)
+    gc()
+}
+message("Loading dictionary file...")
+dict <- readRDS("models/dictionary.rds")
 ```
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
@@ -184,6 +203,8 @@ for (i in 1:4) {
 }
 mf <- matrix(ngrams, nrow=4, ncol=5, byrow=TRUE)
 
+# > object.size(nGrams[[4]])
+# 1282268544 bytes
 ```
 <h1 class="countheads">Prediction of keyboard input: Exploratory data analysis and development plan</h1>
 

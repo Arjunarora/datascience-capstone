@@ -1,8 +1,18 @@
+library(data.table)
+
 getCondProb <- function(nGrams, input, n=4) {
-    message(paste("Input: ", input, sep=" "))
-    tokens <- tokenize(input)
+    message(paste("Input: ", paste(input, collapse=" "), sep=" "))
+    if (is.character(input)) {
+        message("Tokenizing the input")
+        tokens <- tokenize(input)
+    } else {
+        tokens <- input
+    }
+    tokens <- tokens[!is.na(tokens)]
+    message(paste("Tokens: ", paste(tokens, collapse=" "), sep=" "))
+
     # In my implementation, the last 3 are NAs
-    len <- length(tokens) - 3
+    len <- length(tokens)
 
     if (len < 1) {
         message("No input")
@@ -62,14 +72,14 @@ getCondProb <- function(nGrams, input, n=4) {
     return (0.4^(n - 1) * count / nGrams[[1]][, sum(V1)])
 }
 
-predictNext <- function(nGrams, input, n=4, k=0) {
+predictNext <- function(nGrams, dict, input, n=4, k=0) {
     predictions <- NULL
-    tokens <- tokenize(tolower(input))
-    # In my implementation, the last 3 are NAs
-    len <- length(tokens) - 3
+    tokens <- tokenize(cleanText(input))
+    tokens <- tokens[!is.na(tokens)]
 
-    candidates = data.frame(word=rep("", 4), prob=rep(0, 4))
-
+    candidates = c()
+    message(paste(tokens, collapse=" "))
+    len <- length(tokens)
     if (len < 1) {
         message("No input")
         return(NULL)
@@ -81,17 +91,12 @@ predictNext <- function(nGrams, input, n=4, k=0) {
                 N2 == tokens[len - 1] &
                 N3 == tokens[len] &
                 V1 >= k,]
-        if (length(predictions$N4)) {
-            candidates[4,]$word <- as.character(predictions$N4[1])
-            candidates[4,]$prob <- getCondProb(
-                nGrams,
-                paste(
-                    tokens[len - 2],
-                    tokens[len - 1],
-                    tokens[len],
-                    predictions$N4[1],
-                    sep=" "),
-                n=n)
+        num <- nrow(predictions)
+        if (num > 0) {
+            for (i in 1:min(5, num)) {
+                predicted <- c(tokens[(len - 2):len], predictions$N4[i])
+                candidates[dict[predictions$N4[i]]] <- getCondProb(nGrams, predicted, n=n)
+            }
         }
     }
 
@@ -100,25 +105,27 @@ predictNext <- function(nGrams, input, n=4, k=0) {
             N1 == tokens[len - 1] &
                 N2 == tokens[len] &
                 V1 >= k,]
-        if (length(predictions$N3)) {
-            candidates[3,]$word <- as.character(predictions$N3[1])
-            candidates[3,]$prob <- getCondProb(
-                nGrams,
-                paste(
-                    tokens[len - 1],
-                    tokens[len],
-                    predictions$N3[1],
-                    sep=" "),
-                n=n)
+        num <- nrow(predictions)
+        if (num > 0) {
+            for (i in 1:min(5, num)) {
+                if (!predictions$N3[i] %in% candidates) {
+                    predicted <- c(tokens[(len - 1):len], predictions$N3[i])
+                    candidates[dict[predictions$N3[i]]] <- getCondProb(nGrams, predicted, n=n)
+                }
+            }
         }
     }
 
     if (n >= 2 && len >= 1) {
         predictions <- nGrams[[2]][N1 == tokens[len] & V1 >= k,]
-        if (length(predictions$N2)) {
-            candidates[2,]$word <- as.character(predictions$N2[1])
-            candidates[2,]$prob <- getCondProb(
-                nGrams, paste(tokens[len],  predictions$N2[1], sep=" "), n=n)
+        num <- nrow(predictions)
+        if (num > 0) {
+            for (i in 1:min(5, num)) {
+                if (!predictions$N2[i] %in% candidates) {
+                    predicted <- c(tokens[len], predictions$N2[i])
+                    candidates[dict[predictions$N2[i]]] <- getCondProb(nGrams, predicted, n=n)
+                }
+            }
         }
     }
 

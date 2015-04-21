@@ -73,7 +73,7 @@ for (i in 1:length(source)) {
     testFileName <- paste(dataDir, "/", locale, "/", locale, ".", source[i],
                            "_test.txt", sep="")
     inFileName <- getFileName(locale, source[i])
-    createTrainTestData(inFileName, trainFileName, testFileName, cleanTrain=TRUE)
+    createTrainTestData(inFileName, trainFileName, testFileName, cleanTrain=TRUE, trainRate=1.0)
     message(paste("Generated ", source[i], " train/test data"), sep="")
 }
 ```
@@ -159,6 +159,24 @@ if (!file.exists("models/dictionary.rds")) {
 }
 message("Loading dictionary file...")
 dict <- readRDS("models/dictionary.rds")
+if (!exists("dictenv", mode="environment")) {
+    dictenv <- new.env(hash=TRUE, size=length(dict))
+    ret <- lapply(rep(1:length(dict)),
+        FUN=function(i) {assign(dict[i], i, envir=dictenv)})    
+    if (!file.exists("models/dictenv.Rda")) {
+        save(dictenv, file="models/dictenv.Rda")
+    }
+}
+```
+
+```{r}
+reduce <- FALSE
+if (reduce) {
+    nGrams[[4]] = nGrams[[4]][V1 > 1]
+    nGrams[[3]] = nGrams[[3]][V1 > 1]
+    nGrams[[2]] = nGrams[[2]][V1 > 1]
+    nGrams[[1]] = nGrams[[1]][V1 > 1]
+}
 ```
 
 ```{r, echo=FALSE, message=FALSE, warning=FALSE}
@@ -192,19 +210,17 @@ for (i in 1:nrow(counts)) {
     }
 }
 rm(item)
-# gc()
 
 # Most frequent n-grams
 ngrams <- c()
 for (i in 1:4) {
     for (j in 1:5) {
-        ngrams <- c(ngrams, paste(nGrams[[i]][j], collapse=" "))
+        words <- unlist(nGrams[[i]][j])
+        words <- words[1:length(words)-1]
+        ngrams <- c(ngrams, paste(dict[words], collapse=" "))
     }
 }
 mf <- matrix(ngrams, nrow=4, ncol=5, byrow=TRUE)
-
-# > object.size(nGrams[[4]])
-# 1282268544 bytes
 ```
 <h1 class="countheads">Prediction of keyboard input: Exploratory data analysis and development plan</h1>
 
@@ -351,7 +367,7 @@ Table `r tab$label("mostfreq")` shows the 5
 most frequent n-grams. The frequent appearance of the expression such as "thanks
 for the follow" indicates that Twitter corpus is biasing the distribution.
 
-`r render_caption(tab$text("mostfreq", "Five most frequent word sequences in 1 to 4-grams. The number indicates the frequency in the training data."))`
+`r render_caption(tab$text("mostfreq", "Five most frequent word sequences in 1 to 4-grams."))`
 
 | n-gram  | No.1         | No.2         | No.3         | No.4         | No.5         |
 | :------ | :----------- | :----------- | :----------- | :----------- | :----------- |

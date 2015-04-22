@@ -72,7 +72,7 @@ getCondProb <- function(nGrams, input, n=4) {
     return (0.4^(n - 1) * count / nGrams[[1]][, sum(V1)])
 }
 
-predictNext <- function(nGrams, dict, input, n=4, k=0) {
+predictNext <- function(nGrams, dict, input, n=4, k=0, numCandidates=1) {
     predictions <- NULL
     tokens <- tokenize(cleanText(input))
     tokens <- tokens[!is.na(tokens)]
@@ -93,7 +93,7 @@ predictNext <- function(nGrams, dict, input, n=4, k=0) {
                 V1 >= k,]
         num <- nrow(predictions)
         if (num > 0) {
-            for (i in 1:min(5, num)) {
+            for (i in 1:min(numCandidates, num)) {
                 predicted <- c(tokens[(len - 2):len], predictions$N4[i])
                 candidates[dict[predictions$N4[i]]] <- getCondProb(nGrams, predicted, n=n)
             }
@@ -107,7 +107,7 @@ predictNext <- function(nGrams, dict, input, n=4, k=0) {
                 V1 >= k,]
         num <- nrow(predictions)
         if (num > 0) {
-            for (i in 1:min(5, num)) {
+            for (i in 1:min(numCandidates, num)) {
                 if (!predictions$N3[i] %in% candidates) {
                     predicted <- c(tokens[(len - 1):len], predictions$N3[i])
                     candidates[dict[predictions$N3[i]]] <- getCondProb(nGrams, predicted, n=n)
@@ -120,7 +120,7 @@ predictNext <- function(nGrams, dict, input, n=4, k=0) {
         predictions <- nGrams[[2]][N1 == tokens[len] & V1 >= k,]
         num <- nrow(predictions)
         if (num > 0) {
-            for (i in 1:min(5, num)) {
+            for (i in 1:min(numCandidates, num)) {
                 if (!predictions$N2[i] %in% candidates) {
                     predicted <- c(tokens[len], predictions$N2[i])
                     candidates[dict[predictions$N2[i]]] <- getCondProb(nGrams, predicted, n=n)
@@ -129,6 +129,8 @@ predictNext <- function(nGrams, dict, input, n=4, k=0) {
         }
     }
 
+    candiates <- candidates[order(-candidates)]
+    message(candidates)
     return(candidates)
 }
 

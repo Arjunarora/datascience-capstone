@@ -162,7 +162,7 @@ dict <- readRDS("models/dictionary.rds")
 if (!exists("dictenv", mode="environment")) {
     dictenv <- new.env(hash=TRUE, size=length(dict))
     ret <- lapply(rep(1:length(dict)),
-        FUN=function(i) {assign(dict[i], i, envir=dictenv)})    
+        FUN=function(i) {assign(dict[i], i, envir=dictenv)})
     if (!file.exists("models/dictenv.Rda")) {
         save(dictenv, file="models/dictenv.Rda")
     }
@@ -172,10 +172,12 @@ if (!exists("dictenv", mode="environment")) {
 ```{r}
 reduce <- FALSE
 if (reduce) {
-    nGrams[[4]] = nGrams[[4]][V1 > 1]
-    nGrams[[3]] = nGrams[[3]][V1 > 1]
-    nGrams[[2]] = nGrams[[2]][V1 > 1]
-    nGrams[[1]] = nGrams[[1]][V1 > 1]
+    # In this model, when we see 4 or tri-grams entry with a single count,
+    # it surely appers in lower order ngrams. This allow me to compress data.
+    # Also, I forgot to remove "s" so removing now...
+    nGrams[[4]] = nGrams[[4]][V1 > 1 & N4!=which(dict=="s")]
+    nGrams[[3]] = nGrams[[3]][V1 > 1 & N3!=which(dict=="s")]
+    nGrams[[2]] = nGrams[[2]][N2!=which(dict=="s")]
 }
 ```
 
